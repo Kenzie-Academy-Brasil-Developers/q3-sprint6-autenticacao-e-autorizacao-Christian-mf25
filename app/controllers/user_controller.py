@@ -1,10 +1,10 @@
-from secrets import token_urlsafe
 from flask import jsonify, request
 from sqlalchemy.exc import IntegrityError
+from datetime import timedelta
 
 from app.models.user_model import UsersModel
 from app.configs.database import db
-from app.configs.auth import auth
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 
 
 def create_user():
@@ -15,7 +15,6 @@ def create_user():
 	try:
 		data["name"] = data["name"].title()
 		data["last_name"] = data["last_name"].title()
-		data["api_key"] = token_urlsafe(16)
 		user = UsersModel(**data)
 
 		db.session.add(user)
@@ -41,16 +40,19 @@ def login_user():
 	if not user.check_password(data["password"]):
 		return {"error": "Email and password missmatch"}, 401
 
-	return jsonify({"api_key": user.api_key})
+	
+	token = create_access_token(user, expires_delta=timedelta(hours=1))
 
-@auth.login_required
+	return jsonify({"access_token": token})
+
+@jwt_required()
 def get_users():
-	user = auth.current_user()
+	user = get_jwt_identity()
 
 	return jsonify(user), 200
 
 
-@auth.login_required
+@jwt_required()
 def update_user():
 	data = request.get_json()
 	data_keys = data.keys()
@@ -59,19 +61,29 @@ def update_user():
 	data["name"] = data["name"].title()
 	data["last_name"] = data["last_name"].title()
 
-	user = auth.current_user()
+	try:
+		user_to_update = get_jwt_identity()
+		user_email = user_to_update["email"]
+		user = UsersModel.query.filter_by(email=user_email).first()
 
-	for key, value in data.items():
-		setattr(user, key, value)
+		for key, value in data.items():
+			setattr(user, key, value)
 
-	db.session.add(user)
-	db.session.commit()
+		db.session.add(user)
+		db.session.commit()
+	
+	except IntegrityError as e:
+		email = data["email"]
+		return jsonify({"error": f"email '{email}' already registered"}), 409
 
 	return jsonify(user), 200
 
-@auth.login_required
+@jwt_required()
 def delete_user():
-	user_to_delete = auth.current_user()
+	user = get_jwt_identity()
+	user_email = user["email"]
+	user_to_delete = UsersModel.query.filter_by(email=user_email).first()
+
 	user = user_to_delete.name
 	
 	db.session.delete(user_to_delete)
